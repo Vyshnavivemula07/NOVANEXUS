@@ -1,0 +1,39 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+.env.*
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Large raw datasets
+data/raw/
+data/rainfall/
+data/landslides/
+
+# Temporary/generated files
+uploads/*
+!uploads/.gitkeep
+
+# Python generated files
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large terrain dataset
+data/terrain/*.zip
+
+# Keep the demo terrain tile
+!data/terrain/N24E092.SRTMGL1.hgt.zip
