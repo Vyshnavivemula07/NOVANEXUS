@@ -9,7 +9,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = "https://earth-sentinel-jbd.onrender.com";
 
 const sensorIcon = L.icon({
   iconUrl:
