@@ -9,8 +9,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
-const API_URL = "https://earth-sentinel-jbd.onrender.com";
-
+const API_URL = "https://earth-sentinel-jfbd.onrender.com";
 const sensorIcon = L.icon({
   iconUrl:
     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
