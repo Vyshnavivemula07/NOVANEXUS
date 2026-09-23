@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import piexif from "piexifjs";
 import {
   MapContainer,
   TileLayer,
@@ -11,6 +12,36 @@ import "leaflet/dist/leaflet.css";
 import "./App.css";
 
 const API_URL = "https://earth-sentinel-jfbd.onrender.com";
+
+// Set to false when ESP32 sensor data is connected.
+const DEMO_MODE = true;
+
+const DEMO_AI = {
+  risk_score: 78,
+  risk_level: "Critical",
+  probability: 0.785,
+  features: {
+    elevation_m: 65.0,
+    slope_deg: 15.49,
+    aspect_sin: Math.sin((353 * Math.PI) / 180),
+    aspect_cos: Math.cos((353 * Math.PI) / 180),
+  },
+};
+
+const DEMO_SENSOR = {
+  rainfall_mm: 72.5,
+  soil_moisture: 71,
+  tilt_deg: 6.4,
+  vibration: 0.62,
+  risk_score: 53,
+  condition: "Warning",
+  warnings: [
+    "Elevated rainfall: 72.5 mm",
+    "Elevated soil moisture: 71%",
+    "Elevated ground tilt: 6.4°",
+    "Elevated vibration: 0.62",
+  ],
+};
 
 const sensorIcon = L.icon({
   iconUrl:
@@ -51,6 +82,18 @@ function App() {
 
   const [locationStatus, setLocationStatus] =
     useState("Detecting location...");
+
+  const [incidents, setIncidents] = useState([]);
+  const [incidentsLoading, setIncidentsLoading] = useState(false);
+
+  const [reportPhoto, setReportPhoto] = useState(null);
+  const [reportPreview, setReportPreview] = useState("");
+  const [reportLocation, setReportLocation] = useState(null);
+  const [reportLocationStatus, setReportLocationStatus] = useState("Waiting for GPS...");
+  const [reportType, setReportType] = useState("Slope Crack");
+  const [reportDescription, setReportDescription] = useState("");
+  const [reportMessage, setReportMessage] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
 
   // -------------------------------------------------
   // Get risk data from deployed Render backend
@@ -209,12 +252,199 @@ function App() {
   const overall = riskData?.overall;
   const ai = riskData?.ai;
   const sensor = riskData?.sensor;
-  const sensors = riskData?.sensors;
+  const displayAi = DEMO_MODE ? DEMO_AI : ai;
+
+  const sensors = DEMO_MODE
+    ? DEMO_SENSOR
+    : riskData?.sensors;
+
+  const displaySensor = DEMO_MODE
+    ? { available: true, ...DEMO_SENSOR }
+    : sensor;
+
+  // Demo fusion: 65% AI + 25% sensor + 10% incident evidence.
+  const displayOverall = DEMO_MODE && displayAi
+    ? {
+        risk_score: Math.round(
+          displayAi.risk_score * 0.65 +
+          DEMO_SENSOR.risk_score * 0.25 +
+          15 * 0.10
+        ),
+        risk_level: "High",
+        fusion_status: "Demo: AI + Sensor + Incident Evidence",
+      }
+    : overall;
 
   const sensorLocation = riskData?.location;
 
   const location =
     browserLocation || sensorLocation;
+
+  // -------------------------------------------------
+  // Geo-tagged incident reporting
+  // -------------------------------------------------
+
+  const captureReportLocation = () => {
+    if (!navigator.geolocation) {
+      setReportLocationStatus("Geolocation is not supported by this device");
+      return;
+    }
+
+    setReportLocationStatus("Capturing GPS location...");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        setReportLocation({ latitude, longitude, accuracy });
+        setReportLocationStatus("GPS location captured");
+      },
+      (geoError) => {
+        console.error("Incident GPS error:", geoError);
+        setReportLocation(null);
+        setReportLocationStatus("GPS permission required — photo cannot be submitted");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  useEffect(() => {
+    if (activePage === "reporting") {
+      setReportMessage("");
+      captureReportLocation();
+    }
+  }, [activePage]);
+
+  const loadIncidents = async () => {
+    try {
+      setIncidentsLoading(true);
+      const response = await fetch(`${API_URL}/api/incidents`);
+      if (!response.ok) throw new Error(`Incident API error: ${response.status}`);
+      const data = await response.json();
+      setIncidents(data.data || []);
+    } catch (error) {
+      console.error("Incident load error:", error);
+      setReportMessage("Unable to load stored incidents from backend.");
+    } finally {
+      setIncidentsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadIncidents();
+  }, []);
+
+  const handleReportPhoto = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setReportPhoto(file);
+    setReportMessage("");
+
+    const reader = new FileReader();
+    reader.onload = () => setReportPreview(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const toDms = (value) => {
+    const absolute = Math.abs(value);
+    const degrees = Math.floor(absolute);
+    const minutesFloat = (absolute - degrees) * 60;
+    const minutes = Math.floor(minutesFloat);
+    const seconds = Math.round((minutesFloat - minutes) * 60 * 100);
+    return [[degrees, 1], [minutes, 1], [seconds, 100]];
+  };
+
+  const createGeoTaggedImage = (file, gps) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const imageData = reader.result;
+          const image = new Image();
+          image.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const context = canvas.getContext("2d");
+            context.drawImage(image, 0, 0);
+            const jpegData = canvas.toDataURL("image/jpeg", 0.92);
+            const exif = piexif.load(jpegData);
+            const gpsIfd = {};
+            gpsIfd[piexif.GPSIFD.GPSLatitudeRef] = gps.latitude >= 0 ? "N" : "S";
+            gpsIfd[piexif.GPSIFD.GPSLatitude] = toDms(gps.latitude);
+            gpsIfd[piexif.GPSIFD.GPSLongitudeRef] = gps.longitude >= 0 ? "E" : "W";
+            gpsIfd[piexif.GPSIFD.GPSLongitude] = toDms(gps.longitude);
+            gpsIfd[piexif.GPSIFD.GPSMapDatum] = "WGS-84";
+            gpsIfd[piexif.GPSIFD.GPSDateStamp] = new Date().toISOString().slice(0, 10).replaceAll("-", ":");
+            exif.GPS = gpsIfd;
+            const exifBytes = piexif.dump(exif);
+            resolve(piexif.insert(exifBytes, jpegData));
+          };
+          image.onerror = reject;
+          image.src = imageData;
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const submitIncident = async (event) => {
+    event.preventDefault();
+
+    if (!reportPhoto) {
+      setReportMessage("Please select an incident photo.");
+      return;
+    }
+
+    if (!reportLocation) {
+      setReportMessage("GPS location is required. Capture GPS before submitting the photo.");
+      return;
+    }
+
+    setReportSubmitting(true);
+    setReportMessage("");
+
+    try {
+      const geoTaggedPhoto = await createGeoTaggedImage(reportPhoto, reportLocation);
+      const incident = {
+        id: `INC-${Date.now()}`,
+        photo: geoTaggedPhoto,
+        original_filename: reportPhoto.name,
+        latitude: Number(reportLocation.latitude.toFixed(7)),
+        longitude: Number(reportLocation.longitude.toFixed(7)),
+        gps_accuracy_m: Number(reportLocation.accuracy.toFixed(1)),
+        timestamp: new Date().toISOString(),
+        incident_type: reportType,
+        description: reportDescription.trim(),
+        geotagged: true,
+      };
+
+      const response = await fetch(`${API_URL}/api/incidents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(incident),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Incident API error: ${response.status} ${errorText}`);
+      }
+
+      const result = await response.json();
+      setIncidents((current) => [result.data, ...current.filter((item) => item.id !== result.data.id)]);
+      setReportPhoto(null);
+      setReportPreview("");
+      setReportDescription("");
+      setReportMessage("✓ Geo-tagged incident stored in backend and added to the GIS map.");
+    } catch (error) {
+      console.error("Incident submission error:", error);
+      setReportMessage("Unable to geo-tag this image. Please try another photo.");
+    } finally {
+      setReportSubmitting(false);
+    }
+  };
 
   // -------------------------------------------------
   // Dashboard
@@ -235,24 +465,30 @@ function App() {
           </p>
         </div>
 
-        {overall && (
+        {displayOverall && (
           <div className="hero-risk">
             <span>OVERALL RISK</span>
 
             <strong>
-              {overall.risk_score}
+              {displayOverall.risk_score}
             </strong>
 
             <label>
-              {overall.risk_level}
+              {displayOverall.risk_level}
             </label>
           </div>
         )}
       </section>
 
-      {error && (
+      {error && !DEMO_MODE && (
         <div className="error-message">
           {error}
+        </div>
+      )}
+
+      {DEMO_MODE && (
+        <div className="normal-message" style={{ marginBottom: "18px" }}>
+          DEMO MODE — sensor values below are simulated until the ESP32 is connected.
         </div>
       )}
 
@@ -268,7 +504,7 @@ function App() {
           </strong>
 
           <small>
-            Real-time sensor
+            {DEMO_MODE ? "Demo sensor" : "Real-time sensor"}
           </small>
         </div>
 
@@ -282,7 +518,7 @@ function App() {
           </strong>
 
           <small>
-            Real-time sensor
+            {DEMO_MODE ? "Demo sensor" : "Real-time sensor"}
           </small>
         </div>
 
@@ -296,7 +532,7 @@ function App() {
           </strong>
 
           <small>
-            IMU sensor
+            {DEMO_MODE ? "Demo IMU" : "IMU sensor"}
           </small>
         </div>
 
@@ -310,7 +546,7 @@ function App() {
           </strong>
 
           <small>
-            Vibration sensor
+            {DEMO_MODE ? "Demo sensor" : "Vibration sensor"}
           </small>
         </div>
 
@@ -330,11 +566,11 @@ function App() {
             </span>
           </div>
 
-          {ai ? (
+          {displayAi ? (
             <>
               <div className="risk-score">
                 <strong>
-                  {ai.risk_score}
+                  {displayAi.risk_score}
                 </strong>
 
                 <span>
@@ -343,12 +579,12 @@ function App() {
               </div>
 
               <div className="risk-level">
-                {ai.risk_level}
+                {displayAi.risk_level}
               </div>
 
               <div className="probability">
                 AI Probability:{" "}
-                {(ai.probability * 100).toFixed(1)}
+                {(displayAi.probability * 100).toFixed(1)}
                 %
               </div>
 
@@ -360,7 +596,7 @@ function App() {
                   </span>
 
                   <strong>
-                    {ai.features.elevation_m.toFixed(
+                    {displayAi.features.elevation_m.toFixed(
                       1
                     )}{" "}
                     m
@@ -373,7 +609,7 @@ function App() {
                   </span>
 
                   <strong>
-                    {ai.features.slope_deg.toFixed(
+                    {displayAi.features.slope_deg.toFixed(
                       2
                     )}°
                   </strong>
@@ -388,8 +624,8 @@ function App() {
                     {Math.round(
                       (
                         Math.atan2(
-                          ai.features.aspect_sin,
-                          ai.features.aspect_cos
+                          displayAi.features.aspect_sin,
+                          displayAi.features.aspect_cos
                         ) *
                           (180 / Math.PI) +
                         360
@@ -423,15 +659,15 @@ function App() {
             <h2>Sensor Risk</h2>
 
             <span className="live-badge">
-              LIVE
+              {DEMO_MODE ? "DEMO" : "LIVE"}
             </span>
           </div>
 
-          {sensor?.available ? (
+          {displaySensor?.available ? (
             <>
               <div className="risk-score">
                 <strong>
-                  {sensor.risk_score}
+                  {displaySensor.risk_score}
                 </strong>
 
                 <span>
@@ -440,13 +676,13 @@ function App() {
               </div>
 
               <div className="risk-level">
-                {sensor.condition}
+                {displaySensor.condition}
               </div>
 
-              {sensor.warnings?.length > 0 ? (
+              {displaySensor.warnings?.length > 0 ? (
                 <div className="warnings">
 
-                  {sensor.warnings.map(
+                  {displaySensor.warnings.map(
                     (warning, index) => (
                       <div
                         key={index}
@@ -484,25 +720,25 @@ function App() {
           </h2>
 
           <span className="live-badge">
-            REAL-TIME
+            {DEMO_MODE ? "DEMO MODE" : "REAL-TIME"}
           </span>
         </div>
 
-        {overall ? (
+        {displayOverall ? (
           <div className="overall-content">
 
             <div className="overall-score">
-              {overall.risk_score}
+              {displayOverall.risk_score}
             </div>
 
             <div>
 
               <div className="overall-level">
-                {overall.risk_level}
+                {displayOverall.risk_level}
               </div>
 
               <p>
-                {overall.fusion_status ||
+                {displayOverall.fusion_status ||
                   "Risk assessment generated by Earth Sentinel."}
               </p>
 
@@ -752,6 +988,26 @@ function App() {
 
                 </Marker>
 
+                {incidents.map((incident) => (
+                  <Marker
+                    key={incident.id}
+                    position={[incident.latitude, incident.longitude]}
+                    icon={sensorIcon}
+                  >
+                    <Popup>
+                      <div className="map-popup">
+                        <strong>Geo-tagged Incident</strong>
+                        <span>Type: {incident.incident_type}</span>
+                        <span>{incident.description || "No description"}</span>
+                        <span>Latitude: {incident.latitude}</span>
+                        <span>Longitude: {incident.longitude}</span>
+                        <span>GPS Accuracy: ±{incident.gps_accuracy_m} m</span>
+                        <img src={incident.photo} alt="Incident" style={{ width: "160px", borderRadius: "8px", marginTop: "6px" }} />
+                      </div>
+                    </Popup>
+                  </Marker>
+                ))}
+
               </MapContainer>
 
             </div>
@@ -843,11 +1099,113 @@ function App() {
     // -------------------------------------------------
 
     if (activePage === "reporting") {
+      return (
+        <section className="reporting-page">
+          <div className="reporting-header">
+            <div>
+              <h1>Field Incident Reporting</h1>
+              <p>Capture a photograph with GPS coordinates, timestamp and field observations.</p>
+            </div>
+            <div className={reportLocation ? "gps-status ready" : "gps-status"}>
+              <span>●</span> {reportLocationStatus}
+            </div>
+          </div>
 
-      return renderPlaceholder(
-        "◉",
-        "Field Incident Reporting",
-        "Capture a photograph, GPS location and field observation from a mobile device."
+          <form className="report-form" onSubmit={submitIncident}>
+            <div className="report-grid">
+              <div className="report-photo-box">
+                {reportPreview ? (
+                  <img src={reportPreview} alt="Incident preview" className="report-preview" />
+                ) : (
+                  <div className="photo-placeholder">
+                    <div className="feature-icon">◉</div>
+                    <strong>Incident Photograph</strong>
+                    <span>Photo is required for every incident</span>
+                  </div>
+                )}
+                <label className="photo-button">
+                  {reportPhoto ? "Change Photo" : "Take / Upload Photo"}
+                  <input type="file" accept="image/*" capture="environment" onChange={handleReportPhoto} hidden />
+                </label>
+              </div>
+
+              <div className="report-fields">
+                <div className="field-group">
+                  <label>Incident Type</label>
+                  <select value={reportType} onChange={(e) => setReportType(e.target.value)}>
+                    <option>Slope Crack</option>
+                    <option>Rockfall</option>
+                    <option>Soil Movement</option>
+                    <option>Road Damage</option>
+                    <option>Water Seepage</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+
+                <div className="field-group">
+                  <label>Description</label>
+                  <textarea
+                    value={reportDescription}
+                    onChange={(e) => setReportDescription(e.target.value)}
+                    placeholder="Describe the field observation..."
+                    rows="5"
+                  />
+                </div>
+
+                <div className="gps-card">
+                  <div>
+                    <span>LATITUDE</span>
+                    <strong>{reportLocation ? reportLocation.latitude.toFixed(7) : "--"}</strong>
+                  </div>
+                  <div>
+                    <span>LONGITUDE</span>
+                    <strong>{reportLocation ? reportLocation.longitude.toFixed(7) : "--"}</strong>
+                  </div>
+                  <div>
+                    <span>GPS ACCURACY</span>
+                    <strong>{reportLocation ? `±${Math.round(reportLocation.accuracy)} m` : "--"}</strong>
+                  </div>
+                </div>
+
+                <button type="button" className="gps-button" onClick={captureReportLocation}>
+                  Refresh GPS Location
+                </button>
+
+                <button type="submit" className="submit-report" disabled={!reportPhoto || !reportLocation || reportSubmitting}>
+                  {reportSubmitting ? "Saving Geo-tagged Incident..." : "Submit Geo-tagged Incident"}
+                </button>
+
+                {reportMessage && <div className="report-message">{reportMessage}</div>}
+              </div>
+            </div>
+          </form>
+
+          <div className="panel incident-list-panel">
+            <div className="panel-title">
+              <h2>Saved Incidents</h2>
+              <span className="live-badge">{incidents.length} REPORT{incidents.length === 1 ? "" : "S"}</span>
+            </div>
+            {incidentsLoading ? (
+              <div className="empty-state">Loading stored incidents...</div>
+            ) : incidents.length === 0 ? (
+              <div className="empty-state">No field incidents reported yet.</div>
+            ) : (
+              <div className="incident-list">
+                {incidents.map((incident) => (
+                  <div className="incident-row" key={incident.id}>
+                    <img src={incident.photo} alt={incident.incident_type} />
+                    <div>
+                      <strong>{incident.incident_type}</strong>
+                      <span>{incident.description || "No description provided"}</span>
+                      <small>{incident.latitude}, {incident.longitude} · ±{incident.gps_accuracy_m} m</small>
+                    </div>
+                    <small>{new Date(incident.timestamp).toLocaleString()}</small>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
       );
     }
 
