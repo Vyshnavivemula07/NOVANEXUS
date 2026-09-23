@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -9,7 +9,9 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
+
 const API_URL = "https://earth-sentinel-jfbd.onrender.com";
+
 const sensorIcon = L.icon({
   iconUrl:
     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -37,17 +39,40 @@ const menuItems = [
 function App() {
   const [activePage, setActivePage] = useState("dashboard");
 
-  const [backendStatus, setBackendStatus] = useState("Checking...");
+  const [backendStatus, setBackendStatus] =
+    useState("Checking...");
+
   const [riskData, setRiskData] = useState(null);
+
   const [error, setError] = useState("");
-    const [browserLocation, setBrowserLocation] = useState(null);
-  const [locationStatus, setLocationStatus] = useState("Detecting location...");
+
+  const [browserLocation, setBrowserLocation] =
+    useState(null);
+
+  const [locationStatus, setLocationStatus] =
+    useState("Detecting location...");
+
+  // -------------------------------------------------
+  // Get risk data from deployed Render backend
+  // using browser GPS location
+  // -------------------------------------------------
+
   const loadRiskData = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/risk/current`);
+      let url = `${API_URL}/api/risk/current`;
+
+      if (browserLocation) {
+        url +=
+          `?latitude=${browserLocation.latitude}` +
+          `&longitude=${browserLocation.longitude}`;
+      }
+
+      const response = await fetch(url);
 
       if (!response.ok) {
-        throw new Error("Risk API unavailable");
+        throw new Error(
+          `Risk API error: ${response.status}`
+        );
       }
 
       const data = await response.json();
@@ -56,21 +81,42 @@ function App() {
         setRiskData(data);
         setBackendStatus("AI Backend Online");
         setError("");
+      } else {
+        setRiskData(null);
+        setError(
+          data.message || "Risk data unavailable"
+        );
       }
     } catch (err) {
+      console.error("Risk data error:", err);
+
       setBackendStatus("Backend Offline");
-      setError("Unable to connect to Earth Sentinel backend.");
+
+      setError(
+        "Unable to connect to Earth Sentinel backend."
+      );
     }
   };
-    useEffect(() => {
+
+  // -------------------------------------------------
+  // Detect browser GPS location
+  // -------------------------------------------------
+
+  useEffect(() => {
     if (!navigator.geolocation) {
-      setLocationStatus("Geolocation not supported");
+      setLocationStatus(
+        "Geolocation not supported"
+      );
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const { latitude, longitude, accuracy } = position.coords;
+        const {
+          latitude,
+          longitude,
+          accuracy,
+        } = position.coords;
 
         setBrowserLocation({
           latitude,
@@ -78,12 +124,22 @@ function App() {
           accuracy,
         });
 
-        setLocationStatus("Browser GPS location detected");
+        setLocationStatus(
+          "Browser GPS location detected"
+        );
       },
+
       (error) => {
-        console.error("Geolocation error:", error);
-        setLocationStatus("Location permission required");
+        console.error(
+          "Geolocation error:",
+          error
+        );
+
+        setLocationStatus(
+          "Location permission required"
+        );
       },
+
       {
         enableHighAccuracy: true,
         timeout: 10000,
@@ -91,38 +147,79 @@ function App() {
       }
     );
   }, []);
+
+  // -------------------------------------------------
+  // Check deployed backend health
+  // -------------------------------------------------
+
   useEffect(() => {
     const checkBackend = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/health`);
+        const response = await fetch(
+          `${API_URL}/api/health`
+        );
 
         if (!response.ok) {
-          throw new Error("Backend unavailable");
+          throw new Error(
+            "Backend unavailable"
+          );
         }
 
-        setBackendStatus("AI Backend Online");
-        await loadRiskData();
+        setBackendStatus(
+          "AI Backend Online"
+        );
       } catch (err) {
-        setBackendStatus("Backend Offline");
+        console.error(
+          "Backend health error:",
+          err
+        );
+
+        setBackendStatus(
+          "Backend Offline"
+        );
+
         setError(
-          "Start FastAPI on port 8000 to connect the dashboard."
+          "Unable to connect to Earth Sentinel backend."
         );
       }
     };
 
     checkBackend();
+  }, []);
 
-    const interval = setInterval(loadRiskData, 5000);
+  // -------------------------------------------------
+  // Load risk whenever GPS location changes
+  // and refresh every 5 seconds
+  // -------------------------------------------------
+
+  useEffect(() => {
+    loadRiskData();
+
+    const interval = setInterval(() => {
+      loadRiskData();
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [browserLocation]);
+
+  // -------------------------------------------------
+  // Extract API data
+  // -------------------------------------------------
 
   const overall = riskData?.overall;
   const ai = riskData?.ai;
   const sensor = riskData?.sensor;
   const sensors = riskData?.sensors;
+
   const sensorLocation = riskData?.location;
-  const location = browserLocation || sensorLocation;
+
+  const location =
+    browserLocation || sensorLocation;
+
+  // -------------------------------------------------
+  // Dashboard
+  // -------------------------------------------------
+
   const renderDashboard = () => (
     <>
       <section className="hero">
@@ -133,8 +230,8 @@ function App() {
           </h1>
 
           <p>
-            Combining AI predictions, terrain intelligence
-            and live sensor data.
+            Combining AI predictions, terrain
+            intelligence and live sensor data.
           </p>
         </div>
 
@@ -142,9 +239,13 @@ function App() {
           <div className="hero-risk">
             <span>OVERALL RISK</span>
 
-            <strong>{overall.risk_score}</strong>
+            <strong>
+              {overall.risk_score}
+            </strong>
 
-            <label>{overall.risk_level}</label>
+            <label>
+              {overall.risk_level}
+            </label>
           </div>
         )}
       </section>
@@ -161,45 +262,63 @@ function App() {
           <span>Rainfall</span>
 
           <strong>
-            {sensors ? `${sensors.rainfall_mm} mm` : "--"}
+            {sensors?.rainfall_mm != null
+              ? `${sensors.rainfall_mm} mm`
+              : "--"}
           </strong>
 
-          <small>Real-time sensor</small>
+          <small>
+            Real-time sensor
+          </small>
         </div>
 
         <div className="stat-card">
           <span>Soil Moisture</span>
 
           <strong>
-            {sensors ? `${sensors.soil_moisture}%` : "--"}
+            {sensors?.soil_moisture != null
+              ? `${sensors.soil_moisture}%`
+              : "--"}
           </strong>
 
-          <small>Real-time sensor</small>
+          <small>
+            Real-time sensor
+          </small>
         </div>
 
         <div className="stat-card">
           <span>Ground Tilt</span>
 
           <strong>
-            {sensors ? `${sensors.tilt_deg}°` : "--"}
+            {sensors?.tilt_deg != null
+              ? `${sensors.tilt_deg}°`
+              : "--"}
           </strong>
 
-          <small>IMU sensor</small>
+          <small>
+            IMU sensor
+          </small>
         </div>
 
         <div className="stat-card">
           <span>Vibration</span>
 
           <strong>
-            {sensors ? sensors.vibration : "--"}
+            {sensors?.vibration != null
+              ? sensors.vibration
+              : "--"}
           </strong>
 
-          <small>Vibration sensor</small>
+          <small>
+            Vibration sensor
+          </small>
         </div>
 
       </section>
 
       <section className="content-grid">
+
+        {/* AI RISK */}
 
         <div className="panel">
 
@@ -214,8 +333,13 @@ function App() {
           {ai ? (
             <>
               <div className="risk-score">
-                <strong>{ai.risk_score}</strong>
-                <span>/ 100</span>
+                <strong>
+                  {ai.risk_score}
+                </strong>
+
+                <span>
+                  / 100
+                </span>
               </div>
 
               <div className="risk-level">
@@ -224,43 +348,63 @@ function App() {
 
               <div className="probability">
                 AI Probability:{" "}
-                {(ai.probability * 100).toFixed(1)}%
+                {(ai.probability * 100).toFixed(1)}
+                %
               </div>
 
               <div className="terrain-info">
 
                 <div>
-                  <span>Elevation</span>
+                  <span>
+                    Elevation
+                  </span>
 
                   <strong>
-                    {ai.features.elevation_m.toFixed(1)} m
+                    {ai.features.elevation_m.toFixed(
+                      1
+                    )}{" "}
+                    m
                   </strong>
                 </div>
 
                 <div>
-                  <span>Slope</span>
+                  <span>
+                    Slope
+                  </span>
 
                   <strong>
-                    {ai.features.slope_deg.toFixed(2)}°
+                    {ai.features.slope_deg.toFixed(
+                      2
+                    )}°
                   </strong>
                 </div>
 
                 <div>
-                  <span>Aspect</span>
+                  <span>
+                    Aspect
+                  </span>
 
                   <strong>
                     {Math.round(
-                      Math.atan2(
-                        ai.features.aspect_sin,
-                        ai.features.aspect_cos
-                      ) *
-                        (180 / Math.PI) +
+                      (
+                        Math.atan2(
+                          ai.features.aspect_sin,
+                          ai.features.aspect_cos
+                        ) *
+                          (180 / Math.PI) +
                         360
-                    ) % 360}
+                      ) % 360
+                    )}
                     °
                   </strong>
                 </div>
 
+              </div>
+
+              <div className="normal-message">
+                Location:{" "}
+                {riskData?.location_source ||
+                  "Monitoring location"}
               </div>
             </>
           ) : (
@@ -270,6 +414,8 @@ function App() {
           )}
 
         </div>
+
+        {/* SENSOR RISK */}
 
         <div className="panel">
 
@@ -281,18 +427,23 @@ function App() {
             </span>
           </div>
 
-          {sensor ? (
+          {sensor?.available ? (
             <>
               <div className="risk-score">
-                <strong>{sensor.risk_score}</strong>
-                <span>/ 100</span>
+                <strong>
+                  {sensor.risk_score}
+                </strong>
+
+                <span>
+                  / 100
+                </span>
               </div>
 
               <div className="risk-level">
                 {sensor.condition}
               </div>
 
-              {sensor.warnings.length > 0 ? (
+              {sensor.warnings?.length > 0 ? (
                 <div className="warnings">
 
                   {sensor.warnings.map(
@@ -323,10 +474,14 @@ function App() {
 
       </section>
 
+      {/* OVERALL RISK */}
+
       <section className="panel overall-panel">
 
         <div className="panel-title">
-          <h2>Overall Risk Assessment</h2>
+          <h2>
+            Overall Risk Assessment
+          </h2>
 
           <span className="live-badge">
             REAL-TIME
@@ -341,14 +496,16 @@ function App() {
             </div>
 
             <div>
+
               <div className="overall-level">
                 {overall.risk_level}
               </div>
 
               <p>
-                Combined assessment from XGBoost AI
-                and real-time environmental sensors.
+                {overall.fusion_status ||
+                  "Risk assessment generated by Earth Sentinel."}
               </p>
+
             </div>
 
           </div>
@@ -360,17 +517,23 @@ function App() {
 
       </section>
 
+      {/* LOCATION */}
+
       <section className="panel">
 
         <div className="panel-title">
-          <h2>Current Monitoring Location</h2>
+          <h2>
+            Current Monitoring Location
+          </h2>
         </div>
 
         {location ? (
           <div className="location-card">
 
             <div>
-              <span>Latitude</span>
+              <span>
+                Latitude
+              </span>
 
               <strong>
                 {location.latitude}
@@ -378,31 +541,57 @@ function App() {
             </div>
 
             <div>
-              <span>Longitude</span>
+              <span>
+                Longitude
+              </span>
 
               <strong>
                 {location.longitude}
               </strong>
             </div>
-              <div>
-                <span>Location Source</span>
 
-                <strong>
-                  {browserLocation
+            <div>
+              <span>
+                Location Source
+              </span>
+
+              <strong>
+                {browserLocation
                   ? "Browser GPS"
                   : "Backend Sensor"}
+              </strong>
+            </div>
+
+            {browserLocation?.accuracy && (
+              <div>
+                <span>
+                  GPS Accuracy
+                </span>
+
+                <strong>
+                  ±
+                  {Math.round(
+                    browserLocation.accuracy
+                  )}{" "}
+                  m
                 </strong>
-  </div>
+              </div>
+            )}
+
           </div>
         ) : (
           <div className="empty-state">
-            Waiting for GPS location...
+            {locationStatus}
           </div>
         )}
 
       </section>
     </>
   );
+
+  // -------------------------------------------------
+  // Placeholder pages
+  // -------------------------------------------------
 
   const renderPlaceholder = (
     icon,
@@ -415,9 +604,13 @@ function App() {
         {icon}
       </div>
 
-      <h1>{title}</h1>
+      <h1>
+        {title}
+      </h1>
 
-      <p>{description}</p>
+      <p>
+        {description}
+      </p>
 
       <div className="feature-status">
         MODULE READY
@@ -426,181 +619,218 @@ function App() {
     </section>
   );
 
+  // -------------------------------------------------
+  // Page routing
+  // -------------------------------------------------
+
   const renderPage = () => {
 
     if (activePage === "dashboard") {
       return renderDashboard();
     }
 
+    // -------------------------------------------------
+    // GIS MAP
+    // -------------------------------------------------
+
     if (activePage === "gis") {
+
       return (
         <section className="gis-page">
 
-        <div className="gis-header">
+          <div className="gis-header">
 
-        <div>
-          <h1>GIS Risk Map</h1>
+            <div>
 
-          <p>
-            Real-time visualization of monitored
-            locations and environmental risk.
-          </p>
-        </div>
+              <h1>
+                GIS Risk Map
+              </h1>
 
-        {overall && (
-          <div className="map-risk-badge">
-            <span>CURRENT RISK</span>
-            <strong>
-              {overall.risk_score}
-            </strong>
-            <label>
-              {overall.risk_level}
-            </label>
+              <p>
+                Real-time visualization of
+                monitored locations and
+                environmental risk.
+              </p>
+
+            </div>
+
+            {overall && (
+              <div className="map-risk-badge">
+
+                <span>
+                  CURRENT RISK
+                </span>
+
+                <strong>
+                  {overall.risk_score}
+                </strong>
+
+                <label>
+                  {overall.risk_level}
+                </label>
+
+              </div>
+            )}
+
           </div>
-        )}
 
-      </div>
+          {location ? (
 
-      {location ? (
-        <div className="map-container">
+            <div className="map-container">
 
-          <MapContainer
-            center={[
-              location.latitude,
-              location.longitude,
-            ]}
-            zoom={11}
-            scrollWheelZoom={true}
-            className="earth-map"
-          >
+              <MapContainer
+                center={[
+                  location.latitude,
+                  location.longitude,
+                ]}
+                zoom={11}
+                scrollWheelZoom={true}
+                className="earth-map"
+              >
 
-            <TileLayer
-              attribution='&copy; OpenStreetMap contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
+                <TileLayer
+                  attribution="&copy; OpenStreetMap contributors"
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
 
-            <Circle
-              center={[
-                location.latitude,
-                location.longitude,
-              ]}
-              radius={5000}
-              pathOptions={{
-                color: "#19d5bc",
-                fillColor: "#19d5bc",
-                fillOpacity: 0.08,
-              }}
-            />
+                <Circle
+                  center={[
+                    location.latitude,
+                    location.longitude,
+                  ]}
+                  radius={5000}
+                  pathOptions={{
+                    color: "#19d5bc",
+                    fillColor: "#19d5bc",
+                    fillOpacity: 0.08,
+                  }}
+                />
 
-            <Marker
-              position={[
-                location.latitude,
-                location.longitude,
-              ]}
-              icon={sensorIcon}
-            >
+                <Marker
+                  position={[
+                    location.latitude,
+                    location.longitude,
+                  ]}
+                  icon={sensorIcon}
+                >
 
-              <Popup>
+                  <Popup>
 
-                <div className="map-popup">
+                    <div className="map-popup">
 
-                  <strong>
-                    Earth Sentinel Location
-                  </strong>
+                      <strong>
+                        Earth Sentinel Location
+                      </strong>
 
-                  <span>
-                    {browserLocation
-                    ? "Browser GPS Location"
-                    : "Sensor Location"}
-                  </span>
+                      <span>
+                        {browserLocation
+                          ? "Browser GPS Location"
+                          : "Sensor Location"}
+                      </span>
 
-                  <span>
-                    Latitude:{" "}
-                    {location.latitude}
-                  </span>
+                      <span>
+                        Latitude:{" "}
+                        {location.latitude}
+                      </span>
 
-                  <span>
-                    Longitude:{" "}
-                    {location.longitude}
-                  </span>
+                      <span>
+                        Longitude:{" "}
+                        {location.longitude}
+                      </span>
 
-                  {overall && (
-                    <span>
-                      Risk:{" "}
-                      {overall.risk_score}/100
-                    </span>
-                  )}
+                      {overall && (
+                        <span>
+                          Risk:{" "}
+                          {overall.risk_score}
+                          /100
+                        </span>
+                      )}
 
-                </div>
+                    </div>
 
-              </Popup>
+                  </Popup>
 
-            </Marker>
+                </Marker>
 
-          </MapContainer>
+              </MapContainer>
 
-        </div>
-      ) : (
-        <div className="map-empty">
-          Waiting for sensor GPS location...
-        </div>
-      )}
+            </div>
 
-      <div className="map-info-grid">
+          ) : (
 
-        <div className="map-info-card">
+            <div className="map-empty">
+              Waiting for GPS location...
+            </div>
 
-          <span>MONITORED SENSOR</span>
+          )}
 
-          <strong>
-            ESP32-EARTH-SENTINEL-01
-          </strong>
+          <div className="map-info-grid">
 
-          <small>
-            Live sensor location
-          </small>
+            <div className="map-info-card">
 
-        </div>
+              <span>
+                MONITORED SENSOR
+              </span>
 
-        <div className="map-info-card">
+              <strong>
+                ESP32-EARTH-SENTINEL-01
+              </strong>
 
-          <span>LOCATION</span>
+              <small>
+                Live sensor location
+              </small>
 
-          <strong>
-            {location
-              ? `${location.latitude}, ${location.longitude}`
-              : "--"}
-          </strong>
+            </div>
 
-          <small>
-            GPS coordinates
-          </small>
+            <div className="map-info-card">
 
-        </div>
+              <span>
+                LOCATION
+              </span>
 
-        <div className="map-info-card">
+              <strong>
+                {location
+                  ? `${location.latitude}, ${location.longitude}`
+                  : "--"}
+              </strong>
 
-          <span>RISK STATUS</span>
+              <small>
+                GPS coordinates
+              </small>
 
-          <strong>
-            {overall
-              ? overall.risk_level
-              : "--"}
-          </strong>
+            </div>
 
-          <small>
-            AI + sensor fusion
-          </small>
+            <div className="map-info-card">
 
-        </div>
+              <span>
+                RISK STATUS
+              </span>
 
-      </div>
+              <strong>
+                {overall
+                  ? overall.risk_level
+                  : "--"}
+              </strong>
 
-    </section>
-  );
-}
+              <small>
+                {overall?.fusion_status ||
+                  "Risk assessment"}
+              </small>
+
+            </div>
+
+          </div>
+
+        </section>
+      );
+    }
+
+    // -------------------------------------------------
+    // LOCATIONS
+    // -------------------------------------------------
 
     if (activePage === "locations") {
+
       return renderPlaceholder(
         "⌖",
         "Sensor Locations",
@@ -608,7 +838,12 @@ function App() {
       );
     }
 
+    // -------------------------------------------------
+    // REPORTING
+    // -------------------------------------------------
+
     if (activePage === "reporting") {
+
       return renderPlaceholder(
         "◉",
         "Field Incident Reporting",
@@ -616,7 +851,12 @@ function App() {
       );
     }
 
+    // -------------------------------------------------
+    // ALERTS
+    // -------------------------------------------------
+
     if (activePage === "alerts") {
+
       return renderPlaceholder(
         "⚠",
         "Alerts",
@@ -627,12 +867,17 @@ function App() {
     return renderDashboard();
   };
 
+  // -------------------------------------------------
+  // Main UI
+  // -------------------------------------------------
+
   return (
     <div className="app">
 
       <header className="header">
 
         <div>
+
           <div className="brand">
             EARTH SENTINEL
           </div>
@@ -641,11 +886,15 @@ function App() {
             AI-Based Landslide Early Warning &
             Risk Monitoring System
           </div>
+
         </div>
 
         <div className="backend-status">
+
           <span className="status-dot"></span>
+
           {backendStatus}
+
         </div>
 
       </header>
@@ -661,6 +910,7 @@ function App() {
           <nav>
 
             {menuItems.map((item) => (
+
               <button
                 key={item.id}
                 className={
@@ -672,6 +922,7 @@ function App() {
                   setActivePage(item.id)
                 }
               >
+
                 <span className="nav-icon">
                   {item.icon}
                 </span>
@@ -679,7 +930,9 @@ function App() {
                 <span>
                   {item.label}
                 </span>
+
               </button>
+
             ))}
 
           </nav>
@@ -691,16 +944,20 @@ function App() {
           <div className="page-heading">
 
             <div>
+
               <span className="page-section">
                 EARTH SENTINEL
               </span>
 
               <h2>
-                {menuItems.find(
-                  (item) =>
-                    item.id === activePage
-                )?.label}
+                {
+                  menuItems.find(
+                    (item) =>
+                      item.id === activePage
+                  )?.label
+                }
               </h2>
+
             </div>
 
           </div>
@@ -708,9 +965,9 @@ function App() {
           {renderPage()}
 
           <div className="prototype-notice">
-            Prototype system — AI and sensor fusion
-            results are intended for demonstration and
-            further validation.
+            Prototype system — AI and sensor
+            fusion results are intended for
+            demonstration and further validation.
           </div>
 
         </main>
@@ -720,6 +977,7 @@ function App() {
       <nav className="mobile-nav">
 
         {menuItems.map((item) => (
+
           <button
             key={item.id}
             className={
@@ -741,6 +999,7 @@ function App() {
             </small>
 
           </button>
+
         ))}
 
       </nav>
