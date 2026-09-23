@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -40,7 +40,8 @@ function App() {
   const [backendStatus, setBackendStatus] = useState("Checking...");
   const [riskData, setRiskData] = useState(null);
   const [error, setError] = useState("");
-
+    const [browserLocation, setBrowserLocation] = useState(null);
+  const [locationStatus, setLocationStatus] = useState("Detecting location...");
   const loadRiskData = async () => {
     try {
       const response = await fetch(`${API_URL}/api/risk/current`);
@@ -61,7 +62,35 @@ function App() {
       setError("Unable to connect to Earth Sentinel backend.");
     }
   };
+    useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus("Geolocation not supported");
+      return;
+    }
 
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+
+        setBrowserLocation({
+          latitude,
+          longitude,
+          accuracy,
+        });
+
+        setLocationStatus("Browser GPS location detected");
+      },
+      (error) => {
+        console.error("Geolocation error:", error);
+        setLocationStatus("Location permission required");
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 30000,
+      }
+    );
+  }, []);
   useEffect(() => {
     const checkBackend = async () => {
       try {
@@ -92,8 +121,8 @@ function App() {
   const ai = riskData?.ai;
   const sensor = riskData?.sensor;
   const sensors = riskData?.sensors;
-  const location = riskData?.location;
-
+  const sensorLocation = riskData?.location;
+  const location = browserLocation || sensorLocation;
   const renderDashboard = () => (
     <>
       <section className="hero">
@@ -334,7 +363,7 @@ function App() {
       <section className="panel">
 
         <div className="panel-title">
-          <h2>Current Sensor Location</h2>
+          <h2>Current Monitoring Location</h2>
         </div>
 
         {location ? (
@@ -355,7 +384,15 @@ function App() {
                 {location.longitude}
               </strong>
             </div>
+              <div>
+                <span>Location Source</span>
 
+                <strong>
+                  {browserLocation
+                  ? "Browser GPS"
+                  : "Backend Sensor"}
+                </strong>
+  </div>
           </div>
         ) : (
           <div className="empty-state">
@@ -468,11 +505,13 @@ function App() {
                 <div className="map-popup">
 
                   <strong>
-                    Earth Sentinel Sensor
+                    Earth Sentinel Location
                   </strong>
 
                   <span>
-                    ESP32-EARTH-SENTINEL-01
+                    {browserLocation
+                    ? "Browser GPS Location"
+                    : "Sensor Location"}
                   </span>
 
                   <span>
