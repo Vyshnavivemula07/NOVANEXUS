@@ -15,7 +15,9 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 MODEL_PATH = BASE_DIR / "models" / "landslide_model.pkl"
 FEATURES_PATH = BASE_DIR / "models" / "features.json"
 
-
+# Demo monitoring location inside the current NER SRTM coverage
+DEMO_MONITORING_LATITUDE = 24.478972
+DEMO_MONITORING_LONGITUDE = 92.682861
 model = joblib.load(MODEL_PATH)
 
 with open(FEATURES_PATH, "r", encoding="utf-8") as f:
@@ -235,55 +237,92 @@ def get_current_risk(
 ):
 
     # -------------------------------------------------
-    # 1. Determine monitoring location
+    # 1. Browser GPS location
     # -------------------------------------------------
 
     if latitude is not None and longitude is not None:
-        current_latitude = latitude
-        current_longitude = longitude
-        location_source = "Browser GPS"
-
-    elif latest_sensor_data:
-        current_latitude = latest_sensor_data["latitude"]
-        current_longitude = latest_sensor_data["longitude"]
-        location_source = "ESP32 Sensor"
+        gps_latitude = latitude
+        gps_longitude = longitude
+        gps_location_source = "Browser GPS"
 
     else:
-        return {
-            "status": "no_location",
-            "message": "No monitoring location available",
-        }
+        gps_latitude = None
+        gps_longitude = None
+        gps_location_source = None
 
     # -------------------------------------------------
-    # 2. Get rainfall
+    # 2. Determine AI monitoring location
     # -------------------------------------------------
 
     if latest_sensor_data:
-        rainfall_mm = latest_sensor_data["rainfall_mm"]
+
+        monitoring_latitude = latest_sensor_data["latitude"]
+        monitoring_longitude = latest_sensor_data["longitude"]
+        monitoring_source = "ESP32 Sensor"
+
     else:
-        # No ESP32 connected yet.
-        # AI can still run using zero live rainfall.
+
+        monitoring_latitude = DEMO_MONITORING_LATITUDE
+        monitoring_longitude = DEMO_MONITORING_LONGITUDE
+        monitoring_source = "NER Demo Monitoring Site"
+
+    # -------------------------------------------------
+    # 3. Get rainfall
+    # -------------------------------------------------
+
+    if latest_sensor_data:
+
+        rainfall_mm = latest_sensor_data["rainfall_mm"]
+
+    else:
+
+        # ESP32 not connected yet.
+        # AI runs without live rainfall.
         rainfall_mm = 0.0
 
     # -------------------------------------------------
-    # 3. Get terrain for current location
+    # 4. Get terrain for AI monitoring location
     # -------------------------------------------------
 
     try:
+
         terrain = get_terrain(
-            current_latitude,
-            current_longitude,
+            monitoring_latitude,
+            monitoring_longitude,
         )
 
     except Exception as e:
+
         return {
             "status": "terrain_unavailable",
-            "message": "Terrain data is not available for this location",
-            "location": {
-                "latitude": current_latitude,
-                "longitude": current_longitude,
+
+            "message":
+                "Terrain data is not available for the monitoring location",
+
+            "location": (
+                {
+                    "latitude": gps_latitude,
+                    "longitude": gps_longitude,
+                }
+                if gps_latitude is not None
+                else {
+                    "latitude": monitoring_latitude,
+                    "longitude": monitoring_longitude,
+                }
+            ),
+
+            "location_source": (
+                gps_location_source
+                if gps_location_source
+                else monitoring_source
+            ),
+
+            "monitoring_location": {
+                "latitude": monitoring_latitude,
+                "longitude": monitoring_longitude,
+                "source": monitoring_source,
             },
-            "location_source": location_source,
+
             "error": str(e),
         }
 
@@ -292,18 +331,20 @@ def get_current_risk(
     aspect_deg = terrain["aspect_deg"]
 
     # -------------------------------------------------
-    # 4. Calculate AI risk
+    # 5. Calculate AI risk
     # -------------------------------------------------
 
-    probability, ai_risk_score, ai_risk_level, features = predict_risk(
-        rainfall_mm=rainfall_mm,
-        elevation_m=elevation_m,
-        slope_deg=slope_deg,
-        aspect_deg=aspect_deg,
+    probability, ai_risk_score, ai_risk_level, features = (
+        predict_risk(
+            rainfall_mm=rainfall_mm,
+            elevation_m=elevation_m,
+            slope_deg=slope_deg,
+            aspect_deg=aspect_deg,
+        )
     )
 
     # -------------------------------------------------
-    # 5. Sensor risk
+    # 6. Calculate sensor risk
     # -------------------------------------------------
 
     if latest_sensor_data:
@@ -312,14 +353,19 @@ def get_current_risk(
             latest_sensor_data
         )
 
-        sensor_condition = latest_sensor_data["sensor_condition"]
+        sensor_condition = (
+            latest_sensor_data["sensor_condition"]
+        )
 
         if sensor_condition == "Critical":
             sensor_risk_level = "Critical"
+
         elif sensor_condition == "Warning":
             sensor_risk_level = "High"
+
         elif sensor_condition == "Watch":
             sensor_risk_level = "Moderate"
+
         else:
             sensor_risk_level = "Low"
 
@@ -333,7 +379,7 @@ def get_current_risk(
         sensor_available = False
 
     # -------------------------------------------------
-    # 6. Overall risk
+    # 7. Calculate overall risk
     # -------------------------------------------------
 
     if sensor_available:
@@ -358,31 +404,62 @@ def get_current_risk(
 
     else:
 
-        # No hardware yet.
-        # Do NOT pretend sensor data exists.
         overall_risk_score = ai_risk_score
         overall_risk_level = ai_risk_level
-        fusion_status = "AI Only - Sensor Pending"
+
+        fusion_status = (
+            "AI Only - Sensor Pending"
+        )
 
     # -------------------------------------------------
-    # 7. Return complete risk information
+    # 8. Return complete risk information
     # -------------------------------------------------
 
     return {
+
         "status": "ok",
 
-        "location": {
-            "latitude": current_latitude,
-            "longitude": current_longitude,
+        # Browser/device location
+        "location": (
+            {
+                "latitude": gps_latitude,
+                "longitude": gps_longitude,
+            }
+            if gps_latitude is not None
+            else {
+                "latitude": monitoring_latitude,
+                "longitude": monitoring_longitude,
+            }
+        ),
+
+        "location_source": (
+            gps_location_source
+            if gps_location_source
+            else monitoring_source
+        ),
+
+        # Actual location used for AI terrain/risk
+        "monitoring_location": {
+            "latitude": monitoring_latitude,
+            "longitude": monitoring_longitude,
+            "source": monitoring_source,
         },
 
-        "location_source": location_source,
-
+        # AI result
         "ai": {
-            "probability": round(probability, 4),
-            "risk_score": ai_risk_score,
-            "risk_level": ai_risk_level,
-            "features": features,
+
+            "probability":
+                round(probability, 4),
+
+            "risk_score":
+                ai_risk_score,
+
+            "risk_level":
+                ai_risk_level,
+
+            "features":
+                features,
+
             "rainfall_source": (
                 "ESP32 Sensor"
                 if latest_sensor_data
@@ -390,11 +467,21 @@ def get_current_risk(
             ),
         },
 
+        # Sensor result
         "sensor": {
-            "available": sensor_available,
-            "risk_score": sensor_risk_score,
-            "risk_level": sensor_risk_level,
-            "condition": sensor_condition,
+
+            "available":
+                sensor_available,
+
+            "risk_score":
+                sensor_risk_score,
+
+            "risk_level":
+                sensor_risk_level,
+
+            "condition":
+                sensor_condition,
+
             "warnings": (
                 latest_sensor_data["warnings"]
                 if latest_sensor_data
@@ -402,13 +489,22 @@ def get_current_risk(
             ),
         },
 
+        # Overall result
         "overall": {
-            "risk_score": overall_risk_score,
-            "risk_level": overall_risk_level,
-            "fusion_status": fusion_status,
+
+            "risk_score":
+                overall_risk_score,
+
+            "risk_level":
+                overall_risk_level,
+
+            "fusion_status":
+                fusion_status,
         },
 
+        # Raw sensor values
         "sensors": {
+
             "rainfall_mm": (
                 latest_sensor_data["rainfall_mm"]
                 if latest_sensor_data
@@ -434,10 +530,17 @@ def get_current_risk(
             ),
         },
 
+        # Terrain used by XGBoost
         "terrain": {
-            "elevation_m": elevation_m,
-            "slope_deg": slope_deg,
-            "aspect_deg": aspect_deg,
+
+            "elevation_m":
+                elevation_m,
+
+            "slope_deg":
+                slope_deg,
+
+            "aspect_deg":
+                aspect_deg,
         },
     }
 
